@@ -295,7 +295,7 @@ def get_args():
     parser.add_argument('--box_nms_thres', type=float, default=0.8, help='The overlap threshold for excluding a duplicate mask.')
     parser.add_argument('--keep_thres', type=float, default=0.4, help='The keeping threshold for keeping a prompt.')
     # arguments for post-processing floor:
-    parser.add_argument('--post_floor', type=bool, default=True, help='Whether post-processing the floor')
+    parser.add_argument('--post_floor', type=lambda x: x.lower() in ('true', '1', 'yes'), default=True, help='Whether post-processing the floor')
     parser.add_argument('--scene_ht_thres', type=float, default=0.08, help='Height threshold of the floor area proposal')
     parser.add_argument('--scene_inter_thres', type=float, default=0.4, help='Intersection threshold')
     parser.add_argument('--scene_dist_thres', type=float, default=0.01, help='Distance_threshold, like a "thickness" of the floor')   
