@@ -9,6 +9,8 @@ import copy
 main functions
 """
 
+MAX_DBSCAN_POINTS = 100000
+
 def load_ply(ply_path):
     ply_data = plyfile.PlyData.read(ply_path)
     data = ply_data['vertex']
@@ -136,8 +138,9 @@ def compute_mapping(points, data_path, scene_name, frame_id):
 
 
 def isolate_on_pred(xyz, pt_pred, pt_score):
+    print("starting isolate on pred dbscan")
     from sklearn.cluster import DBSCAN
-    clustering = DBSCAN(eps=0.04, min_samples=1)  # for sparser point cloud data, eps may need to be larger (e.g., 0.08 for matterport)
+    clustering = DBSCAN(eps=0.005, min_samples=1)  # for sparser point cloud data, eps may need to be larger (e.g., 0.08 for matterport)
 
     ins_preds = np.unique(pt_pred)
     for ins_id in ins_preds:
@@ -147,6 +150,9 @@ def isolate_on_pred(xyz, pt_pred, pt_score):
         if pt_id_ins.shape[0] <= 0:
             pt_score[:, ins_id] = 0
             continue
+       # if pt_id_ins.shape[0] > MAX_DBSCAN_POINTS:
+       #     print(f"skip isolate_on_pred dbscan for ins_id={ins_id} with {pt_id_ins.shape[0]} points")
+       #     continue
 
         xyz_ins = xyz[pt_id_ins]
         cluster_labels = clustering.fit_predict(xyz_ins)
@@ -168,24 +174,21 @@ def isolate_on_pred(xyz, pt_pred, pt_score):
 
 def isolate_on_score(xyz, pt_score_mean, pt_score_merge):
     from sklearn.cluster import DBSCAN
-    clustering = DBSCAN(eps=0.04, min_samples=1)  # for sparser point cloud data, eps may need to be larger (e.g., 0.08 for matterport)
-    start = 0.
-    stop = 1.
-    step = 0.1
-    i = start
-
-    # set isolate noisy predictions on score space under different score threshold:
-    while i < stop:
-        i += step
-        valid_thres = i
-        ins_score_mean = pt_score_mean.T.copy()
-        ins_score = pt_score_merge.T.copy()
-        for ins_id in range(ins_score.shape[0]):
-            pt_id_ins_mean = np.where(ins_score_mean[ins_id] > valid_thres)[0]  # mean_score (probability) is only for thresholding more easily
-            pt_id_ins_abs = np.where(ins_score[ins_id] > 0)[0]
-            pt_id_ins = pt_id_ins_abs[np.isin(pt_id_ins_abs, pt_id_ins_mean)]
+    clustering = DBSCAN(eps=0.005, min_samples=1)  # for sparser point cloud data, eps may need to be larger (e.g., 0.08 for matterport)
+    # Set isolate noisy predictions on score space under different score thresholds.
+    for valid_thres in np.arange(0.1, 1.01, 0.1):
+        for ins_id in range(pt_score_merge.shape[1]):
+            score_mean_col = pt_score_mean[:, ins_id]
+            score_merge_col = pt_score_merge[:, ins_id]
+            pt_id_ins = np.where((score_mean_col > valid_thres) & (score_merge_col > 0))[0]
             if pt_id_ins.shape[0] <= 0:
                 continue
+            #if pt_id_ins.shape[0] > MAX_DBSCAN_POINTS:
+            #    print(
+            #        f"skip isolate_on_score dbscan for ins_id={ins_id} at threshold={valid_thres:.2f} "
+            #        f"with {pt_id_ins.shape[0]} points"
+            #    )
+            #    continue
             xyz_ins = xyz[pt_id_ins]
             cluster_labels = clustering.fit_predict(xyz_ins)
             # Filter out noise points by excluding the points with a cluster_label of -1
@@ -193,13 +196,13 @@ def isolate_on_score(xyz, pt_score_mean, pt_score_merge):
             # Count the number of points in each cluster
             unique_labels, label_counts = np.unique(filtered_labels, return_counts=True)
             if label_counts.shape[0] == 0:
-                pt_score_merge[pt_id_ins, ins_id] = 0
+                score_merge_col[pt_id_ins] = 0
                 continue
             if label_counts.shape[0] > 1:
                 # Find the cluster label with the most points:
                 most_points_cluster_label = unique_labels[np.argmax(label_counts)]
                 remove_points_cluster_pt_id = pt_id_ins[np.where(filtered_labels != most_points_cluster_label)]
-                pt_score_merge[remove_points_cluster_pt_id, ins_id] = 0
+                score_merge_col[remove_points_cluster_pt_id] = 0
     
     return pt_score_merge
 

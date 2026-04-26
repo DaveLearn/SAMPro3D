@@ -4,6 +4,7 @@ Main Script (including 2D-Guided Prompt Filter, Prompt Consolidation, 3D Segment
 Author: Mutian Xu (mutianxu@link.cuhk.edu.cn)
 """
 
+import contextlib
 import warnings
 warnings.filterwarnings("ignore")
 warnings.filterwarnings("default")
@@ -122,8 +123,16 @@ def perform_3dsegmentation(xyz, keep_idx, scene_output_path, npy_path, args):
     # gap = 1  # number of skipped frames
     n_points = xyz.shape[0]
     num_ins = keep_idx.shape[0]
-    pt_score = torch.zeros([n_points, num_ins], device=device)  # All input points have a score
-    counter_final = torch.zeros([n_points, num_ins], device=device)
+    if num_ins == 0:
+        return (
+            np.zeros((n_points, 0), dtype=np.uint8),
+            np.full(n_points, -1, dtype=np.int32),
+            np.zeros((n_points, 0), dtype=np.float16),
+        )
+
+    # These matrices only store per-frame counts, so compact dtypes save a lot of memory.
+    pt_score = torch.zeros([n_points, num_ins], device=device, dtype=torch.uint8)  # All input points have a score
+    counter_final = torch.zeros([n_points, num_ins], device=device, dtype=torch.int16)
 
     for i, (npy_file) in enumerate(tqdm(npy_path)):
         # if i != 0 and i % gap != 0:
@@ -161,14 +170,11 @@ def perform_3dsegmentation(xyz, keep_idx, scene_output_path, npy_path, args):
             # for calculating pt_score later (since pt_score is considered on all initial prompts)
             ins_idx = torch.where(keep_idx == actual_idx)[0]
             ins_idx_all.append(ins_idx.item())
-        
+
         # when both a point i and a prompt j is found in this frame, counter[i, j] + 1
-        counter_point = mapping[:, 2]   # the found points
-        counter_point = counter_point.reshape(-1, 1).repeat(1, num_ins)
-        counter_ins = torch.zeros(num_ins, device=device)
-        counter_ins[ins_idx_all] += 1   # the found prompts
-        counter_ins = counter_ins.reshape(1, -1).repeat(n_points, 1)
-        counter_final += (counter_point * counter_ins)
+        visible_points = mapping[:, 2].to(counter_final.dtype)
+        for ins_id in ins_idx_all:
+            counter_final[:, ins_id] += visible_points
 
         # caculate the score on mask area:
         for index, (mask) in enumerate(masks):  # iterate over each mask area segmented by different prompts
@@ -176,29 +182,34 @@ def perform_3dsegmentation(xyz, keep_idx, scene_output_path, npy_path, args):
             mask = mask.int()
         
             mask_2d_3d = mask[mapping[:, 0], mapping[:, 1]]
-            mask_2d_3d = mask_2d_3d * mapping[:, 2]  # set the score to 0 if no mapping is found
+            mask_2d_3d = (mask_2d_3d * mapping[:, 2]).to(pt_score.dtype)  # set the score to 0 if no mapping is found
             
             pt_score[:, ins_id] += mask_2d_3d  # For each individual input point in the scene, \
             # if it is projected within the mask area segmented by a prompt k at current frame, we assign its prediction as the prompt ID k
+        del data, points_data, iou_preds_data, masks_data, corre_3d_ins_data, mapping, masks_logits, masks, visible_points
+        _clear_cuda_cache(collect=True)
 
-        del data, points_data, iou_preds_data, masks_data, corre_3d_ins_data, mapping, masks_logits, masks
-        _clear_cuda_cache()
+
+    print(pt_score.shape,file=sys.stderr)
+    print(counter_final.shape,file=sys.stderr)
 
     pt_score_cpu = pt_score.cpu().numpy()
     counter_final_cpu = counter_final.cpu().numpy()
-    counter_final_cpu[np.where(counter_final_cpu==0)] = -1  # avoid divided by zero
+    print("finished per mask loop",file=sys.stderr)
+    del pt_score, counter_final
+    _clear_cuda_cache(collect=True)
 
-    pt_score_mean = pt_score_cpu / counter_final_cpu  # mean score denotes the probability of a point assigned to a specified prompt ID, and is only used for later thresholding
+    counter_safe = counter_final_cpu.astype(np.float16)
+    counter_safe[np.where(counter_safe == 0)] = -1  # avoid divided by zero
+    pt_score_mean = pt_score_cpu.astype(np.float16) / counter_safe  # mean score denotes the probability of a point assigned to a specified prompt ID, and is only used for later thresholding
+    del counter_safe, counter_final_cpu
     pt_score_abs = pt_score_cpu
     max_score = np.max(pt_score_mean, axis=-1)  # the actual scores that has been segmented into one instance
     max_score_abs = np.max(pt_score_abs, axis=-1)
 
-    # if pt_score_mean has the max value on more than one instance，we use the instance with higher pt_score as the pred
-    max_indices_mean = np.where(pt_score_mean == max_score[:, np.newaxis])
-    pt_score_mean_new = pt_score_mean.copy()   # only for calculate label, merge will still use pt_score_mean
-    pt_score_mean_new[max_indices_mean] += pt_score_cpu[max_indices_mean]
-    pt_pred_mean = np.argmax(pt_score_mean_new, axis=-1) # the ins index
-
+    print("finished calculating mean score",file=sys.stderr)
+    # Prefer first-maximum tie breaking here to avoid another full matrix copy.
+    pt_pred_mean = np.argmax(pt_score_mean, axis=-1) # the ins index
     pt_pred_abs = np.argmax(pt_score_abs, axis=-1)
 
     low_pt_idx_mean = np.where(max_score <= 0.)[0]  # assign ins_label=-1 (unlabelled) if its score=0 (i.e., no 2D mask assigned)
@@ -209,21 +220,22 @@ def perform_3dsegmentation(xyz, keep_idx, scene_output_path, npy_path, args):
     pt_score_abs[low_pt_idx_abs] = 0.
     pt_pred_abs[low_pt_idx_abs] = -1
 
+    print("finished thresholding",file=sys.stderr)
     return pt_score_abs, pt_pred_abs, pt_score_mean
 
 
 def prompt_consolidation(xyz, pt_score_abs, pt_pred_abs, pt_score_mean):
     pt_pred_final = pt_pred_abs.copy()
 
+    print("starting isolate on pred",file=sys.stderr)
     # for each segmentated space, we first use DBSCAN to separate noisy predictions that are isolated in 3D space. (This aims to refine the SAM results)
     pt_score_merge = isolate_on_pred(xyz, pt_pred_abs.copy(), pt_score_abs.copy())
-    pt_score_mean_ori = pt_score_mean.copy()
-    pt_score_merge_ori = pt_score_merge.copy()
-
+    print("finished isolate on pred",file=sys.stderr)
+    print("starting isolate on score",file=sys.stderr)
     # for each segmentated space, we again use DBSCAN to separate noisy score-level predictions (indicating a point has been segmented to a label at one frame) \
     # that are isolated in 3D space. (This aims to refine the SAM results)
-    pt_score_merge = isolate_on_score(xyz, pt_score_mean_ori, pt_score_merge_ori)
-
+    pt_score_merge = isolate_on_score(xyz, pt_score_mean, pt_score_merge)
+    print("finished isolate on score",file=sys.stderr)
     # only regard "confident" (label probability > 0.5) points as valid points belonging to an instance (or prompt) for consolidation:
     valid_thres = 0.5
     ins_areas = []
@@ -319,7 +331,7 @@ def get_args():
     return args
 
 
-if __name__ == "__main__":
+def main():
     args = get_args()
     print("Arguments:")
     print(args)
@@ -363,6 +375,8 @@ if __name__ == "__main__":
     # Now we need to perform 3D segmentation to get the initial segmentation label and per-point segmentation score, aimming to check if they are segmenting the same 3D object:
     print("Start initial 3D segmentation ...")
     pt_score_abs, pt_pred_abs, pt_score_mean = perform_3dsegmentation(xyz, keep_idx, scene_output_path, points_npy_path, args)
+   
+    print("Finished initial 3D segmentation!", file=sys.stderr)
     print("Finished initial 3D segmentation!")
     print("********************************************************")
 
@@ -410,3 +424,8 @@ if __name__ == "__main__":
     output_vis_file = os.path.join(args.output_vis_path, args.scene_name + '_seg.ply')
     o3d.io.write_triangle_mesh(output_vis_file, mesh)
     print("Successfully save the visualization result of final segmentation!")
+
+
+if __name__ == "__main__":
+    with contextlib.redirect_stdout(sys.stderr):
+        main()
