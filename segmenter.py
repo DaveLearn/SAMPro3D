@@ -6,6 +6,7 @@ Adapts SAMPro3D's two-stage pipeline to the DEG external segmenter contract.
 from __future__ import annotations
 
 import copy
+import gc
 import logging
 import math
 import os
@@ -46,6 +47,13 @@ SAM_CHECKPOINT_DEFAULTS = {
     "vit_l": "sam_vit_l_0b3195.pth",
     "vit_b": "sam_vit_b_01ec64.pth",
 }
+
+
+def _clear_cuda_cache(collect: bool = False) -> None:
+    if collect:
+        gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def get_dataset_frame_from_observation_frame(observation_frame: ObservationFrame) -> Frame:
@@ -678,6 +686,10 @@ def initialize_scene(
     dataset_root = _write_scannet_temp_dataset(frames, scene_id, mesh, work_root)
     dbg.save_scannet_dataset(dataset_root, scene_id)
 
+    # Free parent-process CUDA frame tensors before launching SAMPro3D subprocesses.
+    del frames
+    _clear_cuda_cache(collect=True)
+
     # Run SAMPro3D pipeline
     pred_path = _run_sampro3d_pipeline(
         dataset_root=dataset_root,
@@ -696,6 +708,9 @@ def initialize_scene(
         scene_inter_thres=scene_inter_thres,
         scene_dist_thres=scene_dist_thres,
     )
+
+    # Recreate GPU frames after the subprocess stages finish.
+    frames = [get_dataset_frame_from_observation_frame(f) for f in observations.frames]
 
     # Load vertex labels
     vertex_labels = _load_sampro3d_labels(pred_path, scene_id, post_floor)

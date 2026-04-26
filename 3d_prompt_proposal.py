@@ -7,6 +7,7 @@ Author: Mutian Xu (mutianxu@link.cuhk.edu.cn) and Xingyilang Yin
 import warnings
 warnings.filterwarnings("ignore")
 warnings.filterwarnings("default")
+import gc
 import os
 import cv2
 import argparse
@@ -18,6 +19,13 @@ from utils.main_utils import *
 from utils.sam_utils import *
 from segment_anything import sam_model_registry, SamPredictor
 from tqdm import trange
+
+
+def _clear_cuda_cache(collect: bool = False) -> None:
+    if collect:
+        gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def create_output_folders(args):
@@ -100,12 +108,16 @@ def sam_seg(predictor, frame_id_init, frame_id_end, init_prompt, args):
         
         if str(pose[0, 0].item()) == '-inf': # skip frame with '-inf' pose
             print(f'skip frame {frame_id}')
+            del image, depth_intrinsic, depth, pose
+            _clear_cuda_cache()
             continue
 
         # 3D-2D projection
         input_point_pos, corre_ins_idx = transform_pt_depth_scannet_torch(init_prompt, depth_intrinsic, depth, pose, predictor.device)  # [valid, 2], [valid]
         if input_point_pos.shape[0] == 0 or input_point_pos.shape[1] == 0:
             print(f'skip frame {frame_id}')
+            del image, depth_intrinsic, depth, pose, input_point_pos, corre_ins_idx
+            _clear_cuda_cache()
             continue
 
         image_size = image.shape[:2]
@@ -124,6 +136,9 @@ def sam_seg(predictor, frame_id_init, frame_id_end, init_prompt, args):
         np.save(os.path.join(args.sam_output_path, args.scene_name, "masks_npy", save_file_name), data_original["masks"])  
         np.save(os.path.join(args.sam_output_path, args.scene_name, "iou_preds_npy", save_file_name), data_original["iou_preds"])  
         np.save(os.path.join(args.sam_output_path, args.scene_name, "corre_3d_ins_npy", save_file_name), data_original["corre_3d_ins"])
+
+        del image, depth_intrinsic, depth, pose, input_point_pos, corre_ins_idx, data_original
+        _clear_cuda_cache()
 
 
 def get_args():
@@ -171,4 +186,6 @@ if __name__ == "__main__":
     # You can define frame_id_init and frame_id_end by yourself for segmenting partial point clouds from limited frames. Sometimes partial result is better!
     print("Start performing SAM segmentations on {} 2D frames...".format(frame_id_end))
     sam_seg(predictor, frame_id_init, frame_id_end, init_prompt, args)
+    del predictor, sam, init_prompt, init_color
+    _clear_cuda_cache(collect=True)
     print("Finished performing SAM segmentations!")

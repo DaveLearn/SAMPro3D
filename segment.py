@@ -42,7 +42,7 @@ class Args:
     sam_checkpoint: Optional[Path] = None
     """Path to SAM checkpoint (auto-downloaded if omitted)."""
 
-    voxel_size: float = 0.02
+    voxel_size: float = 0.04
     """Voxel size for FPS prompt initialization."""
 
     pred_iou_thres: float = 0.7

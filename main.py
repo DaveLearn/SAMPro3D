@@ -7,6 +7,7 @@ Author: Mutian Xu (mutianxu@link.cuhk.edu.cn)
 import warnings
 warnings.filterwarnings("ignore")
 warnings.filterwarnings("default")
+import gc
 import os
 import sys
 import numpy as np
@@ -20,6 +21,13 @@ from utils.sam_utils import *
 from utils.main_utils import *
 from utils.vis_utils import *
 from segment_anything import sam_model_registry, SamPredictor
+
+
+def _clear_cuda_cache(collect: bool = False) -> None:
+    if collect:
+        gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 # 2D-Guided Prompt Filter:
@@ -94,6 +102,9 @@ def prompt_filter(init_prompt, scene_output_path, npy_path, predictor, args):
         keep_score[keep_ins_idx] += 1
         del_score[del_ins_idx] += 1 
 
+        del data, points_data, iou_preds_data, masks_data, corre_3d_ins_data
+        _clear_cuda_cache()
+
     # make all selected frames happy:
     counter[torch.where(counter >= stop_limit)] = stop_limit
     counter[torch.where(counter == 0)] = -1  #  avoid that the the score is divided by counter of 0
@@ -134,6 +145,8 @@ def perform_3dsegmentation(xyz, keep_idx, scene_output_path, npy_path, args):
         # calculate the 3d-2d mapping on ALL input points (not just prompt)
         mapping = compute_mapping(xyz, args.data_path, args.scene_name, frame_id)
         if mapping[:, 2].sum() == 0: # no points corresponds to this image, skip
+            del data, points_data, iou_preds_data, masks_data, corre_3d_ins_data, mapping
+            _clear_cuda_cache()
             continue
         mapping = torch.from_numpy(mapping).to(device)
 
@@ -167,6 +180,9 @@ def perform_3dsegmentation(xyz, keep_idx, scene_output_path, npy_path, args):
             
             pt_score[:, ins_id] += mask_2d_3d  # For each individual input point in the scene, \
             # if it is projected within the mask area segmented by a prompt k at current frame, we assign its prediction as the prompt ID k
+
+        del data, points_data, iou_preds_data, masks_data, corre_3d_ins_data, mapping, masks_logits, masks
+        _clear_cuda_cache()
 
     pt_score_cpu = pt_score.cpu().numpy()
     counter_final_cpu = counter_final.cpu().numpy()
@@ -339,6 +355,8 @@ if __name__ == "__main__":
     print("Start 2D-Guided Prompt Filter ...")
     keep_idx = prompt_filter(init_prompt, scene_output_path, points_npy_path, predictor, args)
     # pt_filtered = pt_init[keep_idx.clone().cpu().numpy()]
+    del predictor, sam
+    _clear_cuda_cache(collect=True)
     print("Finished 2D-Guided Prompt Filter!")
     print("********************************************************")
 
