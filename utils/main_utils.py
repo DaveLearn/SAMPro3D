@@ -40,7 +40,7 @@ def transform_pt_depth_scannet_torch(points, depth_intrinsic, depth, pose, devic
     :return p: N x 2 format
     """
 
-    vis_thres = 0.1
+    vis_thres = 0.05
     depth_shift = 1000.0
     
     fx = depth_intrinsic[0,0]

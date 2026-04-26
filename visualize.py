@@ -577,6 +577,57 @@ def _plot_prompt_cloud(prompt_xyz: np.ndarray, mesh: Optional[o3d.geometry.Trian
     plt.close(fig)
 
 
+def _plot_kept_prompt_cloud(
+    prompt_xyz: np.ndarray,
+    kept_prompt_xyz: np.ndarray,
+    mesh: Optional[o3d.geometry.TriangleMesh],
+    save_path: Path,
+) -> None:
+    fig = plt.figure(figsize=(8, 7))
+    ax = fig.add_subplot(111, projection="3d")
+
+    bounds_points = [prompt_xyz]
+    if mesh is not None and mesh.has_vertices():
+        vertices = np.asarray(mesh.vertices)
+        bounds_points.append(vertices)
+        if len(vertices) > 50000:
+            rng = np.random.default_rng(42)
+            vertices = vertices[rng.choice(len(vertices), size=50000, replace=False)]
+        ax.scatter(vertices[:, 0], vertices[:, 1], vertices[:, 2], s=1, c="lightgray", alpha=0.25)  # pyright: ignore[reportArgumentType]
+
+    if len(prompt_xyz) > 0:
+        ax.scatter(prompt_xyz[:, 0], prompt_xyz[:, 1], prompt_xyz[:, 2], s=4, c="tab:red", alpha=0.18)  # pyright: ignore[reportArgumentType]
+    if len(kept_prompt_xyz) > 0:
+        ax.scatter(kept_prompt_xyz[:, 0], kept_prompt_xyz[:, 1], kept_prompt_xyz[:, 2], s=14, c="tab:green", alpha=0.95)  # pyright: ignore[reportArgumentType]
+
+    stacked = np.concatenate(bounds_points, axis=0)
+    mins = stacked.min(axis=0)
+    maxs = stacked.max(axis=0)
+    centers = (mins + maxs) / 2.0
+    half_range = np.max(maxs - mins) / 2.0
+    if half_range <= 0:
+        half_range = 0.5
+    ax.set_xlim(centers[0] - half_range, centers[0] + half_range)
+    ax.set_ylim(centers[1] - half_range, centers[1] + half_range)
+    ax.set_zlim(centers[2] - half_range, centers[2] + half_range)
+
+    ax.set_title(f"Globally Kept Prompts ({len(kept_prompt_xyz)} / {len(prompt_xyz)})")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=180)
+    plt.close(fig)
+
+
+def _save_prompt_point_cloud(points_xyz: np.ndarray, color_rgb: np.ndarray, save_path: Path) -> None:
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(points_xyz.astype(np.float64))
+    colors = np.broadcast_to(color_rgb.reshape(1, 3), (len(points_xyz), 3))
+    point_cloud.colors = o3d.utility.Vector3dVector(colors.astype(np.float64))
+    o3d.io.write_point_cloud(str(save_path), point_cloud)
+
+
 def _save_points_overlay(image: np.ndarray, points: np.ndarray, save_path: Path, title: str, subtitle: Optional[str] = None) -> None:
     fig, ax = plt.subplots(figsize=(10, 7))
     ax.imshow(image)
@@ -584,6 +635,35 @@ def _save_points_overlay(image: np.ndarray, points: np.ndarray, save_path: Path,
         ax.scatter(points[:, 0], points[:, 1], s=24, c="tab:red", edgecolors="white", linewidths=0.6)
     ax.set_title(title if subtitle is None else f"{title}\n{subtitle}")
     ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=180)
+    plt.close(fig)
+
+
+def _save_prompt_mask_overlay(
+    image: np.ndarray,
+    prompt_masks: np.ndarray,
+    prompt_ids: np.ndarray,
+    save_path: Path,
+    title: str,
+) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    axes[0].imshow(image)
+    axes[0].set_title("RGB")
+    axes[0].axis("off")
+
+    prompt_id_map = np.zeros(image.shape[:2], dtype=np.int32)
+    for mask, prompt_id in zip(prompt_masks, prompt_ids):
+        prompt_id_map[mask] = int(prompt_id) + 1
+
+    colors = _random_colors_for_labels(prompt_id_map.ravel()).reshape(prompt_id_map.shape + (3,))
+    alpha = np.where(prompt_id_map > 0, 0.45, 0.0)
+    axes[1].imshow(image)
+    axes[1].imshow(colors, alpha=alpha)
+    axes[1].set_title("Masks Induced By Kept Prompts")
+    axes[1].axis("off")
+
+    fig.suptitle(title)
     fig.tight_layout()
     fig.savefig(save_path, dpi=180)
     plt.close(fig)
@@ -673,7 +753,7 @@ def _filtered_stage1_data(
     stability_score_thres: float,
     box_nms_thres: float,
     device: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray], np.ndarray, np.ndarray]:
     from torchvision.ops import batched_nms
 
     points = torch.from_numpy(np.load(scene_output_dir / "points_npy" / npy_name)).to(device)
@@ -697,6 +777,8 @@ def _filtered_stage1_data(
     local_keep_points = np.zeros((0, 2), dtype=np.float32)
     global_keep_points = np.zeros((0, 2), dtype=np.float32)
     kept_mask_union = None
+    kept_prompt_masks = np.zeros((0, 0, 0), dtype=bool)
+    kept_prompt_ids = np.zeros((0,), dtype=np.int32)
 
     if len(data["masks"]) > 0:
         binary_masks = data["masks"] > mask_threshold
@@ -714,9 +796,11 @@ def _filtered_stage1_data(
         data.filter(global_mask)
         if len(data["points"]) > 0:
             global_keep_points = data["points"].detach().cpu().numpy()
-            kept_mask_union = (data["masks"] > mask_threshold).any(dim=0).detach().cpu().numpy()
+            kept_prompt_masks = (data["masks"] > mask_threshold).detach().cpu().numpy()
+            kept_prompt_ids = data["corre_3d_ins"].detach().cpu().numpy().astype(np.int32)
+            kept_mask_union = kept_prompt_masks.any(axis=0)
 
-    return raw_points, local_keep_points, global_keep_points, raw_mask_union, kept_mask_union
+    return raw_points, local_keep_points, global_keep_points, raw_mask_union, kept_mask_union, kept_prompt_masks, kept_prompt_ids
 
 
 def _visualize_prompts(paths: RunPaths, save_dir: Path, args: Args) -> list[str]:
@@ -800,7 +884,41 @@ def _visualize_prompts(paths: RunPaths, save_dir: Path, args: Args) -> list[str]
         return lines
 
     global_keep_idx = _compute_global_keep_idx(prompt_xyz, paths.sam_output_scene_dir, args)
+    kept_prompt_indices = global_keep_idx.detach().cpu().numpy().astype(np.int64)
+    kept_prompt_xyz = prompt_xyz[kept_prompt_indices] if len(kept_prompt_indices) > 0 else np.zeros((0, 3), dtype=prompt_xyz.dtype)
     lines.append(f"- Global prompt filter kept {len(global_keep_idx)} / {len(prompt_xyz)} prompt IDs.")
+    if len(kept_prompt_indices) > 0:
+        lines.append(
+            "- Kept prompt ids: "
+            + ", ".join(str(int(idx)) for idx in kept_prompt_indices[:50])
+            + (" ..." if len(kept_prompt_indices) > 50 else "")
+        )
+    _write_text(
+        save_dir / "kept_prompt_ids.txt",
+        "\n".join(str(int(idx)) for idx in kept_prompt_indices) + ("\n" if len(kept_prompt_indices) > 0 else ""),
+    )
+    _plot_kept_prompt_cloud(prompt_xyz, kept_prompt_xyz, mesh, save_dir / "prompt_cloud_kept_overview.png")
+    if len(kept_prompt_xyz) > 0:
+        _save_prompt_point_cloud(kept_prompt_xyz, np.array([0.1, 0.8, 0.2]), save_dir / "kept_prompts.ply")
+
+    if args.open3d and len(kept_prompt_xyz) > 0:
+        try:
+            geometries: list[o3d.geometry.Geometry] = []
+            if mesh is not None:
+                mesh_vis = o3d.geometry.TriangleMesh(mesh)
+                mesh_vis.paint_uniform_color([0.8, 0.8, 0.8])
+                geometries.append(mesh_vis)
+            all_prompt_pcd = o3d.geometry.PointCloud()
+            all_prompt_pcd.points = o3d.utility.Vector3dVector(prompt_xyz)
+            all_prompt_pcd.paint_uniform_color([1.0, 0.0, 0.0])
+            geometries.append(all_prompt_pcd)
+            kept_prompt_pcd = o3d.geometry.PointCloud()
+            kept_prompt_pcd.points = o3d.utility.Vector3dVector(kept_prompt_xyz)
+            kept_prompt_pcd.paint_uniform_color([0.1, 0.8, 0.2])
+            geometries.append(kept_prompt_pcd)
+            o3d.visualization.draw_geometries(geometries, window_name="SAMPro3D Kept Prompts")
+        except Exception:
+            logger.exception("Failed to open Open3D kept prompt viewer")
 
     stage1_files = _sorted_numbered_files(list((paths.sam_output_scene_dir / "points_npy").glob("*.npy")))
     sample_indices = _sample_indices(len(stage1_files), args.max_frames)
@@ -810,7 +928,7 @@ def _visualize_prompts(paths: RunPaths, save_dir: Path, args: Args) -> list[str]
         if paths.color_dir is None:
             continue
         color = imageio.imread(paths.color_dir / f"{frame_name}.jpg")
-        raw_points, local_keep_points, global_keep_points, raw_mask_union, kept_mask_union = _filtered_stage1_data(
+        raw_points, local_keep_points, global_keep_points, raw_mask_union, kept_mask_union, kept_prompt_masks, kept_prompt_ids = _filtered_stage1_data(
             paths.sam_output_scene_dir,
             npy_name,
             global_keep_idx,
@@ -830,7 +948,28 @@ def _visualize_prompts(paths: RunPaths, save_dir: Path, args: Args) -> list[str]
             save_dir / f"stage1_prompt_filter_{frame_name}.png",
             f"Stage-1 Prompt Filtering For Frame {frame_name}",
         )
+        kept_projected_points, kept_visible_idx = _project_prompts(kept_prompt_xyz, color, imageio.imread(paths.depth_dir / f"{frame_name}.png"), intrinsics, np.asarray(np.loadtxt(paths.pose_dir / f"{frame_name}.txt"), dtype=np.float64), args.device) if len(kept_prompt_xyz) > 0 else (np.zeros((0, 2), dtype=np.float32), np.zeros((0,), dtype=np.int64))
+        _save_points_overlay(
+            color,
+            kept_projected_points,
+            save_dir / f"prompt_projection_kept_{frame_name}.png",
+            f"Kept Prompt Projections For Frame {frame_name}",
+            subtitle=f"visible kept prompts: {len(kept_visible_idx)} / {len(kept_prompt_xyz)}",
+        )
+        if len(kept_prompt_ids) > 0:
+            _save_prompt_mask_overlay(
+                color,
+                kept_prompt_masks,
+                kept_prompt_ids,
+                save_dir / f"prompt_masks_kept_{frame_name}.png",
+                f"Kept Prompt Masks For Frame {frame_name}",
+            )
+            _write_text(
+                save_dir / f"prompt_masks_kept_{frame_name}.txt",
+                "\n".join(str(int(prompt_id)) for prompt_id in kept_prompt_ids) + "\n",
+            )
 
+    lines.append("- Saved `prompt_masks_kept_<frame>.png` overlays plus matching prompt-id text files for sampled frames with globally kept prompt masks.")
     return lines
 
 
