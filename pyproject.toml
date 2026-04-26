@@ -1,0 +1,49 @@
+[project]
+name = "sampro3d"
+version = "0.1.0"
+description = "SAMPro3D: Locating SAM prompts in 3D for zero-shot instance segmentation"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "imageio>=2.36.0",
+    "matplotlib>=3.8.4",
+    "natsort>=8.4.0",
+    "numpy>=1.26.4,<2.0",
+    "open3d>=0.18.0",
+    "opencv-python>=4.10.0.84",
+    "plyfile>=1.1",
+    "scikit-image>=0.24.0",
+    "scikit-learn>=1.5.2",
+    "setuptools>=69.0.0",
+    "torch==2.7.1",
+    "torchaudio==2.7.1",
+    "torchvision==0.22.1",
+    "tqdm>=4.66.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tool.pixi.pypi-dependencies]
+segment-anything = { git = "https://github.com/facebookresearch/segment-anything.git" }
+pointops = { path = "libs/pointops" }
+
+[tool.pixi.pypi-options]
+no-build-isolation = ["pointops"]
+
+[tool.pixi.dependencies]
+cuda-version = "12.6.*"
+cuda = ">=12.6.3,<13"
+setuptools = ">=69,<75"
+wheel = "*"
+
+[tool.pixi.tasks]
+proposal = "python 3d_prompt_proposal.py"
+segment = "python main.py"
+segment_external = "python main.py"
+preprocess_2d_scannet = "python dataset_preprocess/preprocess_2d_scannet.py"
