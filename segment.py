@@ -42,19 +42,19 @@ class Args:
     sam_checkpoint: Optional[Path] = None
     """Path to SAM checkpoint (auto-downloaded if omitted)."""
 
-    voxel_size: float = 0.2
+    voxel_size: float = 0.02
     """Voxel size for FPS prompt initialization."""
 
     pred_iou_thres: float = 0.7
     """Predicted IoU threshold for prompt filter."""
 
-    stability_score_thres: float = 0.6
+    stability_score_thres: float = 0.95
     """Stability score threshold for prompt filter."""
 
-    box_nms_thres: float = 0.8
+    box_nms_thres: float = 0.7
     """Box NMS threshold for prompt filter."""
 
-    keep_thres: float = 0.4
+    keep_thres: float = 0.1
     """Keep ratio threshold for prompt filter."""
 
     post_floor: bool = False
