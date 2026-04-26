@@ -19,8 +19,10 @@ from urllib.request import urlretrieve
 import imageio.v2 as imageio
 import numpy as np
 import open3d as o3d
+from plyfile import PlyData, PlyElement
 import torch
 
+from helpers.debug_visualize import DebugVisualizer
 from initializerdefs import (
     InstanceMaskObjectsDef,
     ObjectSegmentations,
@@ -420,6 +422,22 @@ def _ensure_sam_checkpoint(model_type: str, checkpoint_path: Optional[Path]) -> 
     return cached
 
 
+def _cast_ply_vertices_to_float32(ply_path: Path) -> None:
+    """Re-write PLY with float32 vertex properties (pointops expects Float, not Double)."""
+    ply = PlyData.read(str(ply_path))
+    vertex = ply.elements[0]
+    dt = vertex.data.dtype
+    float64_props = [name for name in dt.names if dt[name] == np.float64]
+    if not float64_props:
+        return
+    new_dt = [(name, np.float32 if dt[name] == np.float64 else dt[name]) for name in dt.names]
+    new_data = np.empty(len(vertex.data), dtype=new_dt)
+    for name in dt.names:
+        new_data[name] = vertex.data[name].astype(np.float32) if dt[name] == np.float64 else vertex.data[name]
+    new_elements = [PlyElement.describe(new_data, vertex.name)] + [e for e in ply.elements[1:]]
+    PlyData(new_elements, text=ply.text).write(str(ply_path))
+
+
 def _write_scannet_temp_dataset(
     frames: List[Frame],
     scene_id: str,
@@ -465,6 +483,7 @@ def _write_scannet_temp_dataset(
 
     ply_path = scene_dir / f"{scene_id}_vh_clean_2.ply"
     o3d.io.write_triangle_mesh(str(ply_path), mesh)
+    _cast_ply_vertices_to_float32(ply_path)
 
     logger.info("Wrote temp ScanNet dataset to %s (%d frames)", dataset_root, len(frames))
     return dataset_root
@@ -651,9 +670,13 @@ def initialize_scene(
 
     scene_id = _sanitize_scene_id(observations.id or "scene")
 
+    debug_dir = intermediate_outputs_path / "debug" if intermediate_outputs_path else None
+    dbg = DebugVisualizer(debug_dir)
+
     # Write ScanNet-style temp dataset
     logger.info("Writing temp ScanNet dataset ...")
     dataset_root = _write_scannet_temp_dataset(frames, scene_id, mesh, work_root)
+    dbg.save_scannet_dataset(dataset_root, scene_id)
 
     # Run SAMPro3D pipeline
     pred_path = _run_sampro3d_pipeline(
@@ -676,6 +699,7 @@ def initialize_scene(
 
     # Load vertex labels
     vertex_labels = _load_sampro3d_labels(pred_path, scene_id, post_floor)
+    dbg.save_segmented_mesh(mesh, vertex_labels, "mesh_segmented_raw.ply")
 
     # Filter by workspace (zero out labels for segments mostly outside workspace)
     vertices = np.asarray(mesh.vertices)
@@ -715,6 +739,10 @@ def initialize_scene(
     for name in instance_groups:
         instance_groups[name][~np.isin(instance_groups[name], valid_ids)] = 0
 
+    vertex_labels_filtered = vertex_labels.copy()
+    vertex_labels_filtered[~np.isin(vertex_labels_filtered, valid_ids)] = 0
+    dbg.save_segmented_mesh(mesh, vertex_labels_filtered, "mesh_filtered.ply")
+
     # Build InstanceMaskObjectsDef
     frame_ids: List[int] = []
     pixel_masks: List[np.ndarray] = []
@@ -730,6 +758,8 @@ def initialize_scene(
         frame_ids=frame_ids,
         pixel_object_ids=pixel_masks,
     )
+
+    dbg.save_pixel_masks(frames, instance_groups)
 
     logger.info("Initialized %d objects (after table removal)", len(valid_ids))
     return ObjectSegmentations(object_segmentations=instance_mask_objects)
