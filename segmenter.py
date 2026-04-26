@@ -477,8 +477,8 @@ def _write_scannet_temp_dataset(
         depth_mm = (depth * 1000.0).clip(0, 65535).astype(np.uint16)
         imageio.imwrite(depth_dir / f"{frame_id}.png", depth_mm)
 
-        # SAMPro3D expects camera-to-world poses (it inverts to get world_to_camera)
-        pose = frame.X_VW_opencv.cpu().numpy()
+        # SAMPro3D expects camera-to-world poses (it inverts to get world_to_camera).
+        pose = frame.X_WV_opencv.cpu().numpy()
         np.savetxt(pose_dir / f"{frame_id}.txt", pose, fmt="%.8f")
 
     ply_path = scene_dir / f"{scene_id}_vh_clean_2.ply"

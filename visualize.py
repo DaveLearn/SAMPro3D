@@ -12,14 +12,14 @@ import contextlib
 import io
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Literal, Optional, Sequence
+from typing import Any, Literal, Optional, Sequence, cast
 import logging
 import math
 
-import imageio.v2 as imageio
+import imageio.v2 as imageio  # pyright: ignore[reportMissingImports]
 import matplotlib.pyplot as plt
 import numpy as np
-import open3d as o3d
+import open3d as o3d  # pyright: ignore[reportMissingModuleSource]
 import torch
 import tyro
 
@@ -56,7 +56,7 @@ class Args:
     save_dir: Optional[Path] = None
     """Optional directory to write visualization artifacts to."""
 
-    stage: Literal["all", "inventory", "export", "prompts", "predictions"] = "all"
+    stage: Literal["all", "inventory", "export", "mesh", "prompts", "predictions"] = "all"
     """Restrict work to one stage, or run everything that is available."""
 
     max_frames: int = 6
@@ -64,6 +64,9 @@ class Args:
 
     open3d: bool = False
     """Open interactive Open3D viewers for mesh/prompt artifacts when possible."""
+
+    mesh_source: Literal["auto", "dataset", "debug_raw", "debug_filtered", "visualize_raw", "visualize_filtered", "output_vis"] = "auto"
+    """Which mesh to inspect in mesh-view mode."""
 
     device: str = "cuda"
     """Torch device for prompt reprojection and filter diagnostics."""
@@ -104,6 +107,12 @@ class RunPaths:
     pred_dir: Path
     vis_dir: Path
     debug_dir: Path
+
+
+@dataclass
+class MeshArtifact:
+    label: str
+    path: Path
 
 
 def _numeric_stem(path: Path) -> int:
@@ -189,6 +198,57 @@ def _resolve_run_paths(output_dir: Path) -> RunPaths:
     )
 
 
+def _find_output_vis_mesh(paths: RunPaths) -> Optional[Path]:
+    if not paths.vis_dir.exists():
+        return None
+    if paths.scene_id is not None:
+        candidate = paths.vis_dir / f"{paths.scene_id}_seg.ply"
+        if candidate.exists():
+            return candidate
+    ply_files = sorted(paths.vis_dir.glob("*.ply"))
+    return ply_files[0] if ply_files else None
+
+
+def _candidate_mesh_artifacts(paths: RunPaths, save_dir: Path) -> list[MeshArtifact]:
+    candidates: list[MeshArtifact] = []
+    if paths.mesh_path is not None and paths.mesh_path.exists():
+        candidates.append(MeshArtifact("dataset", paths.mesh_path))
+
+    debug_raw = paths.debug_dir / "mesh_segmented_raw.ply"
+    if debug_raw.exists():
+        candidates.append(MeshArtifact("debug_raw", debug_raw))
+
+    debug_filtered = paths.debug_dir / "mesh_filtered.ply"
+    if debug_filtered.exists():
+        candidates.append(MeshArtifact("debug_filtered", debug_filtered))
+
+    vis_raw = save_dir / "mesh_segmented_raw.ply"
+    if vis_raw.exists():
+        candidates.append(MeshArtifact("visualize_raw", vis_raw))
+
+    vis_filtered = save_dir / "mesh_segmented_filtered.ply"
+    if vis_filtered.exists():
+        candidates.append(MeshArtifact("visualize_filtered", vis_filtered))
+
+    output_vis = _find_output_vis_mesh(paths)
+    if output_vis is not None:
+        candidates.append(MeshArtifact("output_vis", output_vis))
+
+    return candidates
+
+
+def _select_mesh_artifact(paths: RunPaths, save_dir: Path, source: str) -> Optional[MeshArtifact]:
+    candidates = _candidate_mesh_artifacts(paths, save_dir)
+    if not candidates:
+        return None
+    if source == "auto":
+        return candidates[0]
+    for candidate in candidates:
+        if candidate.label == source:
+            return candidate
+    return None
+
+
 def _inventory(paths: RunPaths) -> tuple[list[str], dict[str, object]]:
     artifacts: dict[str, object] = {
         "work_root": paths.work_root.exists(),
@@ -265,7 +325,7 @@ def _plot_camera_path(poses: Sequence[np.ndarray], save_path: Path) -> None:
         forward[:, 0],
         forward[:, 1],
         forward[:, 2],
-        length=0.08,
+        length=cast(Any, 0.08),
         normalize=True,
         color="tab:red",
         label="camera +z",
@@ -277,7 +337,7 @@ def _plot_camera_path(poses: Sequence[np.ndarray], save_path: Path) -> None:
         up[:, 0],
         up[:, 1],
         up[:, 2],
-        length=0.05,
+        length=cast(Any, 0.05),
         normalize=True,
         color="tab:green",
         label="camera +y",
@@ -293,9 +353,9 @@ def _plot_camera_path(poses: Sequence[np.ndarray], save_path: Path) -> None:
 
 
 def _observed_export_pose(observation_frame) -> np.ndarray:
-    x_vw = np.linalg.inv(np.asarray(observation_frame.X_WV, dtype=np.float64))
-    x_vw[1:3, :] *= -1.0
-    return x_vw
+    x_wv = np.asarray(observation_frame.X_WV, dtype=np.float64).copy()
+    x_wv[:, 1:3] *= -1.0
+    return x_wv
 
 
 def _validate_export(
@@ -467,10 +527,8 @@ def _load_export_frames(paths: RunPaths) -> list[Frame]:
         color = imageio.imread(color_file)
         depth_mm = imageio.imread(depth_file)
         pose = np.asarray(np.loadtxt(pose_file), dtype=np.float32)
-
-        x_vw = pose.copy()
-        x_vw[1:3, :] *= -1.0
-        x_wv = np.linalg.inv(x_vw)
+        x_wv = pose.copy()
+        x_wv[:, 1:3] *= -1.0
 
         frame = Frame(
             id=_numeric_stem(color_file),
@@ -488,14 +546,28 @@ def _plot_prompt_cloud(prompt_xyz: np.ndarray, mesh: Optional[o3d.geometry.Trian
     fig = plt.figure(figsize=(8, 7))
     ax = fig.add_subplot(111, projection="3d")
 
+    bounds_points = [prompt_xyz]
     if mesh is not None and mesh.has_vertices():
         vertices = np.asarray(mesh.vertices)
+        bounds_points.append(vertices)
         if len(vertices) > 50000:
             rng = np.random.default_rng(42)
             vertices = vertices[rng.choice(len(vertices), size=50000, replace=False)]
-        ax.scatter(vertices[:, 0], vertices[:, 1], vertices[:, 2], s=0.2, c="lightgray", alpha=0.4)
+        ax.scatter(vertices[:, 0], vertices[:, 1], vertices[:, 2], s=1, c="lightgray", alpha=0.4)  # pyright: ignore[reportArgumentType]
 
-    ax.scatter(prompt_xyz[:, 0], prompt_xyz[:, 1], prompt_xyz[:, 2], s=6.0, c="tab:red", alpha=0.95)
+    ax.scatter(prompt_xyz[:, 0], prompt_xyz[:, 1], prompt_xyz[:, 2], s=6, c="tab:red", alpha=0.95)  # pyright: ignore[reportArgumentType]
+
+    stacked = np.concatenate(bounds_points, axis=0)
+    mins = stacked.min(axis=0)
+    maxs = stacked.max(axis=0)
+    centers = (mins + maxs) / 2.0
+    half_range = np.max(maxs - mins) / 2.0
+    if half_range <= 0:
+        half_range = 0.5
+    ax.set_xlim(centers[0] - half_range, centers[0] + half_range)
+    ax.set_ylim(centers[1] - half_range, centers[1] + half_range)
+    ax.set_zlim(centers[2] - half_range, centers[2] + half_range)
+
     ax.set_title("Initial Prompt Cloud Over Mesh")
     ax.set_xlabel("x")
     ax.set_ylabel("y")
@@ -768,6 +840,67 @@ def _save_colored_mesh(mesh: o3d.geometry.TriangleMesh, labels: np.ndarray, save
     o3d.io.write_triangle_mesh(str(save_path), mesh_copy)
 
 
+def _open_mesh_viewer(path: Path, window_name: str) -> None:
+    mesh = o3d.io.read_triangle_mesh(str(path))
+    if not mesh.has_vertices():
+        raise ValueError(f"Mesh has no vertices: {path}")
+    if not mesh.has_vertex_colors():
+        mesh.paint_uniform_color([0.8, 0.8, 0.8])
+    mesh.compute_vertex_normals()
+    o3d.visualization.draw_geometries([mesh], window_name=window_name)
+
+
+def _visualize_mesh(paths: RunPaths, save_dir: Path, args: Args) -> list[str]:
+    lines = ["## Mesh Viewer"]
+
+    mesh_artifact = _select_mesh_artifact(paths, save_dir, args.mesh_source)
+    if mesh_artifact is None:
+        available = ", ".join(candidate.label for candidate in _candidate_mesh_artifacts(paths, save_dir)) or "none"
+        lines.append(f"- Could not resolve mesh source `{args.mesh_source}`. Available mesh sources: {available}.")
+        return lines
+
+    mesh = o3d.io.read_triangle_mesh(str(mesh_artifact.path))
+    vertices = np.asarray(mesh.vertices)
+    triangles = np.asarray(mesh.triangles)
+    bbox = mesh.get_axis_aligned_bounding_box() if mesh.has_vertices() else None
+
+    lines.append(f"- Selected mesh source: `{mesh_artifact.label}`")
+    lines.append(f"- Mesh path: `{mesh_artifact.path}`")
+    lines.append(f"- Vertices: {len(vertices)}")
+    lines.append(f"- Triangles: {len(triangles)}")
+    lines.append(f"- Has vertex colors: {mesh.has_vertex_colors()}")
+    if bbox is not None:
+        lines.append(
+            "- Bounding box: "
+            f"min={np.round(bbox.min_bound, 4).tolist()}, max={np.round(bbox.max_bound, 4).tolist()}"
+        )
+
+    _write_text(
+        save_dir / "mesh_viewer_selection.txt",
+        "\n".join(
+            [
+                f"mesh_source={mesh_artifact.label}",
+                f"mesh_path={mesh_artifact.path}",
+                f"vertices={len(vertices)}",
+                f"triangles={len(triangles)}",
+                f"has_vertex_colors={mesh.has_vertex_colors()}",
+            ]
+        )
+        + "\n",
+    )
+
+    if args.open3d:
+        try:
+            _open_mesh_viewer(mesh_artifact.path, window_name=f"SAMPro3D Mesh Viewer [{mesh_artifact.label}]")
+        except Exception:
+            logger.exception("Failed to open Open3D mesh viewer")
+            lines.append("- Open3D viewer failed to launch; see logs for details.")
+    else:
+        lines.append("- Mesh viewer not opened because `--open3d` was not enabled.")
+
+    return lines
+
+
 def _save_instance_mask_overlay(frame: Frame, mask: np.ndarray, save_path: Path, title: str) -> None:
     colors = _random_colors_for_labels(mask.ravel()).reshape(mask.shape + (3,))
     rgb = np.clip(frame.color.detach().cpu().numpy(), 0.0, 1.0)
@@ -927,6 +1060,10 @@ def run() -> None:
 
     if args.stage in ("all", "export"):
         report_lines.extend(_validate_export(paths, save_dir, observations))
+        report_lines.append("")
+
+    if args.stage in ("all", "mesh"):
+        report_lines.extend(_visualize_mesh(paths, save_dir, args))
         report_lines.append("")
 
     if args.stage in ("all", "prompts"):
