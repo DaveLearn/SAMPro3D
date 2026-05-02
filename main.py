@@ -3,7 +3,7 @@ Main Script (including 2D-Guided Prompt Filter, Prompt Consolidation, 3D Segment
 
 Author: Mutian Xu (mutianxu@link.cuhk.edu.cn)
 """
-
+import contextlib
 import warnings
 warnings.filterwarnings("ignore")
 warnings.filterwarnings("default")
@@ -319,7 +319,7 @@ def get_args():
     return args
 
 
-if __name__ == "__main__":
+def main():
     args = get_args()
     print("Arguments:")
     print(args)
@@ -410,3 +410,8 @@ if __name__ == "__main__":
     output_vis_file = os.path.join(args.output_vis_path, args.scene_name + '_seg.ply')
     o3d.io.write_triangle_mesh(output_vis_file, mesh)
     print("Successfully save the visualization result of final segmentation!")
+
+
+if __name__ == "__main__":
+    with contextlib.redirect_stdout(sys.stderr):
+        main()

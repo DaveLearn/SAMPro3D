@@ -9,6 +9,9 @@ import copy
 main functions
 """
 
+DBSCAN_EPS = 0.005
+VIS_THRESH = 0.05
+
 def load_ply(ply_path):
     ply_data = plyfile.PlyData.read(ply_path)
     data = ply_data['vertex']
@@ -38,7 +41,7 @@ def transform_pt_depth_scannet_torch(points, depth_intrinsic, depth, pose, devic
     :return p: N x 2 format
     """
 
-    vis_thres = 0.1
+    vis_thres = VIS_THRESH
     depth_shift = 1000.0
     
     fx = depth_intrinsic[0,0]
@@ -86,7 +89,7 @@ def compute_mapping(points, data_path, scene_name, frame_id):
     :param intrinsic: 3x3 format
     :return: mapping, N x 3 format, (H,W,mask)
     """
-    vis_thres = 0.1
+    vis_thres = VIS_THRESH
     depth_shift = 1000.0
 
     mapping = np.zeros((3, points.shape[0]), dtype=int)
@@ -137,7 +140,7 @@ def compute_mapping(points, data_path, scene_name, frame_id):
 
 def isolate_on_pred(xyz, pt_pred, pt_score):
     from sklearn.cluster import DBSCAN
-    clustering = DBSCAN(eps=0.04, min_samples=1)  # for sparser point cloud data, eps may need to be larger (e.g., 0.08 for matterport)
+    clustering = DBSCAN(eps=DBSCAN_EPS, min_samples=1)  # for sparser point cloud data, eps may need to be larger (e.g., 0.08 for matterport)
 
     ins_preds = np.unique(pt_pred)
     for ins_id in ins_preds:
@@ -168,7 +171,7 @@ def isolate_on_pred(xyz, pt_pred, pt_score):
 
 def isolate_on_score(xyz, pt_score_mean, pt_score_merge):
     from sklearn.cluster import DBSCAN
-    clustering = DBSCAN(eps=0.04, min_samples=1)  # for sparser point cloud data, eps may need to be larger (e.g., 0.08 for matterport)
+    clustering = DBSCAN(eps=DBSCAN_EPS, min_samples=1)  # for sparser point cloud data, eps may need to be larger (e.g., 0.08 for matterport)
     start = 0.
     stop = 1.
     step = 0.1

@@ -26,7 +26,7 @@ def _random_colors_for_labels(labels: np.ndarray, seed: int = 42) -> np.ndarray:
     colors = np.empty((labels_int.shape[0], 3), dtype=np.float64)
 
     bg_mask = labels_int <= 0
-    colors[bg_mask] = np.array([0.9, 0.9, 0.9])
+    colors[bg_mask] = np.array([0, 0, 0])
 
     fg = labels_int[~bg_mask]
     if fg.size:
