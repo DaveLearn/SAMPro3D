@@ -3,7 +3,7 @@
 
 .pixi/
 __pycache__/
-outputs/
+outputs
 libs/pointops/build/
 libs/pointops/pointops.egg-info/
 sampro3d.egg-info/

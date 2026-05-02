@@ -40,8 +40,8 @@ initializerdefs = { path = "../../packages/initializerdefs", editable = true }
 no-build-isolation = ["pointops"]
 
 [tool.pixi.dependencies]
-cuda-version = "12.6.*"
-cuda = ">=12.6.3,<13"
+cuda-version = "12.8.*"
+cuda = ">=12.8.0,<13"
 setuptools = ">=69,<75"
 wheel = "*"
 
