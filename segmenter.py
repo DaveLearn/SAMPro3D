@@ -10,6 +10,7 @@ import gc
 import logging
 import math
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -596,6 +597,9 @@ def _run_sampro3d_pipeline(
     result = subprocess.run(stage2_cmd, cwd=str(project_root), env=env, capture_output=False, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"SAMPro3D stage 2 failed with exit code {result.returncode}")
+
+    shutil.rmtree(sam_output_path, ignore_errors=True)
+    logger.info("Deleted SAMPro3D stage-1 outputs: %s", sam_output_path)
 
     return pred_path
 
