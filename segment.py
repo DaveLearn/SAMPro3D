@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import tyro
 
-from initializerdefs import Observations, SceneSetup
+from initializerdefs import Observations, SceneSetup, load_observations_from_transforms_path
 from segmenter import initialize_scene
 
 
@@ -27,8 +27,8 @@ DEFAULT_SEED = 42
 
 @dataclass
 class Args:
-    observations_path: tyro.conf.Positional[Path]
-    """Path to the pickled Observations."""
+    transforms_path: tyro.conf.Positional[Path]
+    """Path to transforms.json for the dataset."""
 
     scene_path: tyro.conf.Positional[Path]
     """Path to the pickled SceneSetup."""
@@ -96,8 +96,8 @@ def run() -> None:
         logger.info("params: %s", args)
         logger.info("Determinism enabled with seed=%d", DEFAULT_SEED)
 
-        logger.info("Loading observations from %s ...", args.observations_path)
-        dataset: Observations = Observations.load(args.observations_path)
+        logger.info("Loading observations from %s ...", args.transforms_path)
+        dataset: Observations = load_observations_from_transforms_path(args.transforms_path)
         logger.info("Observations loaded.")
 
         logger.info("Loading scene setup from %s ...", args.scene_path)
