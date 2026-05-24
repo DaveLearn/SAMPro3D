@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import tyro
 
-from initializerdefs import Observations, SceneSetup, load_observations_from_transforms_path
+from initializerdefs import Observations, SceneSetup, get_mesh_path_for_transforms, load_observations_from_transforms_path
 from segmenter import initialize_scene
 
 
@@ -116,6 +116,7 @@ def run() -> None:
             dataset,
             scene,
             intermediate_outputs_path=output_dir,
+            mesh_path=get_mesh_path_for_transforms(args.transforms_path),
             device=args.device,
             model_type=args.model_type,
             sam_checkpoint=args.sam_checkpoint,
