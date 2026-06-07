@@ -15,9 +15,6 @@ dependencies = [
     "scikit-image>=0.26.0,<0.27",
     "scikit-learn>=1.8.0,<2",
     "setuptools",
-    "torch>=2.10.0,<3",
-    "torchaudio>=2.11.0,<3",
-    "torchvision>=0.25.0,<0.26",
     "tqdm>=4.67.3,<5",
     "tyro>=1.0.13,<2",
 ]
@@ -31,11 +28,16 @@ channels = ["conda-forge"]
 platforms = ["linux-64"]
 
 [tool.pixi.pypi-dependencies]
+torch       = { version = "==2.11.0", index = "https://download.pytorch.org/whl/cu130" }
+torchvision = { version = "==0.26.0", index = "https://download.pytorch.org/whl/cu130" }
+torchaudio  = { version = "==2.11.0", index = "https://download.pytorch.org/whl/cu130" }
 segment-anything = { git = "https://github.com/facebookresearch/segment-anything.git" }
 pointops = { path = "libs/pointops" }
 psdframe = { path = "../../packages/psdframe", editable = true }
 initializerdefs = { path = "../../packages/initializerdefs", editable = true }
 psdstaticdataset = { path = "../../packages/psdstaticdataset", editable = true }
+
+
 
 [tool.pixi.pypi-options]
 no-build-isolation = ["pointops"]
@@ -43,7 +45,7 @@ no-build-isolation = ["pointops"]
 [tool.pixi.dependencies]
 cuda-version = ">=13.2,<14"
 cuda = ">=13.2.1,<14"
-setuptools = ">=82.0.1,<83"
+#setuptools = ">=82.0.1,<83"
 wheel = ">=0.47.0,<0.48"
 
 [tool.pixi.tasks]
