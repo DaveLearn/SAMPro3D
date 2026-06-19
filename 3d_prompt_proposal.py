@@ -83,9 +83,12 @@ def process_batch(
         return_logits=True,
     )
     
-    # Serialize predictions and store in MaskData  
+    # Serialize predictions and store in MaskData.
+    # Store mask logits as float16: every consumer only thresholds them (at 0.0, and
+    # +/-1.0 for the stability score), so half precision is numerically ample and
+    # halves both the per-frame host-RAM accumulation and the saved .npy size.
     data_original = MaskData(
-        masks=masks.flatten(0, 1),
+        masks=masks.flatten(0, 1).half(),
         iou_preds=iou_preds.flatten(0, 1),
         points=points, 
         corre_3d_ins=ins_idxs 
@@ -126,6 +129,10 @@ def sam_seg(predictor, frame_id_init, frame_id_end, init_prompt, args):
         data_original = MaskData()
         for (points, ins_idxs) in batch_iterator(64, input_point_pos, corre_ins_idx):
             batch_data_original = process_batch(predictor, points, ins_idxs, image_size)
+            # Offload each batch to host RAM before accumulating: the full-resolution
+            # float logit masks would otherwise pile up on the GPU across all prompt
+            # batches for a frame and OOM (the per-frame masks can reach tens of GiB).
+            batch_data_original.to_numpy()
             data_original.cat(batch_data_original)
             del batch_data_original
         predictor.reset_image()
