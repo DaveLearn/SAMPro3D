@@ -31,6 +31,10 @@ from initializerdefs import (
     ObservationFrame,
     Observations,
     SceneSetup,
+    runtime_start,
+    runtime_stop,
+    runtime_pause,
+    runtime_resume,
 )
 from psdframe import Frame
 
@@ -655,6 +659,9 @@ def initialize_scene(
     scene_dist_thres: float = 0.01,
 ) -> ObjectSegmentations:
     """Run SAMPro3D on DEG observations and return ObjectSegmentations."""
+    # NB: SAMPro3D runs SAM in two subprocess stages, so their in-subprocess SAM
+    # checkpoint loads cannot be excluded from this level and are counted as compute.
+    _rt = runtime_start("sampro3d", scene=observations.id, n_frames=len(observations.frames))
     frames = [get_dataset_frame_from_observation_frame(f) for f in observations.frames]
     if not frames:
         raise ValueError("No frames in observations")
@@ -674,7 +681,9 @@ def initialize_scene(
         raise RuntimeError("Mesh is empty")
 
     # Ensure checkpoint
+    runtime_pause(_rt)  # exclude checkpoint download/ensure from the timed compute
     checkpoint = _ensure_sam_checkpoint(model_type, sam_checkpoint)
+    runtime_resume(_rt)
 
     # Prepare temp work directory
     if intermediate_outputs_path is not None:
@@ -733,7 +742,10 @@ def initialize_scene(
     if instance_groups is None:
         instance_groups = {}
 
-    # Frame-count threshold: keep only labels visible in >= 3 frames
+    # Frame-count threshold: keep only labels visible in enough frames. The usual
+    # rule is >=3, but with only 3 views that demands the object appear in *every*
+    # frame, which is too strict, so relax to >=2 when there are <=3 views.
+    min_frame_count = 2 if len(frames) <= 3 else 3
     unique_labels = np.unique(vertex_labels)
     valid_ids = np.array([lbl for lbl in unique_labels if lbl > 0])
     if len(valid_ids) > 0:
@@ -743,7 +755,7 @@ def initialize_scene(
                 if np.any(instance_groups[name] == lbl):
                     label_frame_counts[lbl] += 1
         for lbl in valid_ids:
-            if label_frame_counts[lbl] < 3:
+            if label_frame_counts[lbl] < min_frame_count:
                 logger.info("Removing label %d (visible in %d frames)", lbl, label_frame_counts[lbl])
                 valid_ids = valid_ids[valid_ids != lbl]
                 for name in instance_groups:
@@ -784,6 +796,7 @@ def initialize_scene(
     dbg.save_pixel_masks(frames, instance_groups)
 
     logger.info("Initialized %d objects (after table removal)", len(valid_ids))
+    runtime_stop(_rt)
     return ObjectSegmentations(
         object_segmentations=instance_mask_objects,
         mesh_vertex_instance_ids=vertex_labels_filtered,
