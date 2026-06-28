@@ -742,10 +742,8 @@ def initialize_scene(
     if instance_groups is None:
         instance_groups = {}
 
-    # Frame-count threshold: keep only labels visible in enough frames. The usual
-    # rule is >=3, but with only 3 views that demands the object appear in *every*
-    # frame, which is too strict, so relax to >=2 when there are <=3 views.
-    min_frame_count = 2 if len(frames) <= 3 else 3
+    # Frame-count threshold: keep only labels visible in enough frames.
+    min_frame_count = 3
     unique_labels = np.unique(vertex_labels)
     valid_ids = np.array([lbl for lbl in unique_labels if lbl > 0])
     if len(valid_ids) > 0:

@@ -28,9 +28,9 @@ channels = ["conda-forge"]
 platforms = ["linux-64"]
 
 [tool.pixi.pypi-dependencies]
-torch       = { version = "==2.11.0", index = "https://download.pytorch.org/whl/cu130" }
-torchvision = { version = "==0.26.0", index = "https://download.pytorch.org/whl/cu130" }
-torchaudio  = { version = "==2.11.0", index = "https://download.pytorch.org/whl/cu130" }
+torch       = { version = "==2.11.0", index = "https://download.pytorch.org/whl/cu128" }
+torchvision = { version = "==0.26.0", index = "https://download.pytorch.org/whl/cu128" }
+torchaudio  = { version = "==2.11.0", index = "https://download.pytorch.org/whl/cu128" }
 segment-anything = { git = "https://github.com/facebookresearch/segment-anything.git" }
 pointops = { path = "libs/pointops" }
 psdframe = { path = "../../packages/psdframe", editable = true }
@@ -43,10 +43,15 @@ psdstaticdataset = { path = "../../packages/psdstaticdataset", editable = true }
 no-build-isolation = ["pointops"]
 
 [tool.pixi.dependencies]
-cuda-version = ">=13.2,<14"
-cuda = ">=13.2.1,<14"
+cuda-version = "12.8.*"
+cuda = ">=12.8,<13"
 #setuptools = ">=82.0.1,<83"
 wheel = ">=0.47.0,<0.48"
+
+[tool.pixi.activation.env]
+# Pin the compute arch for compiling pointops. Without this, torch's auto-detect
+# can emit an arch (e.g. 10.1) that the CUDA 12.8 toolchain rejects. 8.6 = RTX 3090.
+TORCH_CUDA_ARCH_LIST = "8.6+PTX"
 
 [tool.pixi.tasks]
 proposal = "python 3d_prompt_proposal.py"
