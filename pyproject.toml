@@ -45,15 +45,17 @@ no-build-isolation = ["pointops"]
 [tool.pixi.dependencies]
 cuda-version = "12.8.*"
 cuda = ">=12.8,<13"
-#setuptools = ">=82.0.1,<83"
 wheel = ">=0.47.0,<0.48"
-
-[tool.pixi.activation.env]
-# Pin the compute arch for compiling pointops. Without this, torch's auto-detect
-# can emit an arch (e.g. 10.1) that the CUDA 12.8 toolchain rejects. 8.6 = RTX 3090.
-TORCH_CUDA_ARCH_LIST = "8.6+PTX"
+# pip is needed by the build_pointops task. It pulls conda setuptools in, which
+# must stay <82 -- torch 2.11.0+cu128 declares setuptools<82 and the conda pin
+# wins over the pypi solve, so an unpinned setuptools makes the env unsolvable.
+pip = ">=24"
+setuptools = "<82"
 
 [tool.pixi.tasks]
+# Rebuild the pointops CUDA extension for a different GPU arch than the machine
+# that ran `pixi install`. See scripts/build_pointops.sh for when this is needed.
+build_pointops = "bash scripts/build_pointops.sh"
 proposal = "python 3d_prompt_proposal.py"
 segment = "python main.py"
 segment_external = "python segment.py"
