@@ -3,20 +3,20 @@ set -euo pipefail
 
 # Rebuilds the pointops CUDA extension into the pixi environment.
 #
-# `pixi install` already builds pointops, but its build does not see
-# [tool.pixi.activation.env], so it always uses torch's auto-detected arch for
-# the GPU present on the installing machine. Use this when that is wrong:
-# a different GPU runs the code than installed it, or a load fails with
-# "no kernel image is available for execution on the device".
+# `pixi install` already builds pointops, for the arch list pinned in
+# [tool.pixi.activation.env] -- Turing through Blackwell, so the result is
+# portable. Use this to rebuild for something else: a single arch to save build
+# time, or a card that list does not cover (a load failing with "no kernel image
+# is available for execution on the device").
 #
 #   pixi run build_pointops                            # auto-detect this machine's GPU
 #   POINTOPS_CUDA_ARCH_LIST="8.0;9.0+PTX" pixi run build_pointops
 #
-# Auto-detect is the default because it produces native cubins for whatever card
-# is present, including ones newer than any list hardcoded here. The conda CUDA
-# activation scripts export a TORCH_CUDA_ARCH_LIST covering every arch they know
-# (including ones the toolchain rejects, e.g. 10.1), so it is cleared unless the
-# caller asked for a specific list.
+# Auto-detect is this script's default because it produces native cubins for
+# whatever card is present, including ones newer than any hardcoded list. Note
+# it requires clearing TORCH_CUDA_ARCH_LIST: both the pixi activation above and
+# conda's cuda-nvcc activation export one (conda's includes 10.1, which torch
+# rejects outright with "Unknown CUDA arch").
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"

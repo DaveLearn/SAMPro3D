@@ -46,11 +46,27 @@ no-build-isolation = ["pointops"]
 cuda-version = "12.8.*"
 cuda = ">=12.8,<13"
 wheel = ">=0.47.0,<0.48"
+# Without ninja, torch's BuildExtension falls back to a serial distutils compile
+# loop and builds pointops on one core.
+ninja = ">=1.11"
 # pip is needed by the build_pointops task. It pulls conda setuptools in, which
 # must stay <82 -- torch 2.11.0+cu128 declares setuptools<82 and the conda pin
 # wins over the pypi solve, so an unpinned setuptools makes the env unsolvable.
 pip = ">=24"
 setuptools = "<82"
+
+[tool.pixi.activation.env]
+# Compute archs used when pixi builds pointops. This must be set: conda's
+# cuda-nvcc activation otherwise exports a list containing 10.1, which torch
+# does not know and rejects with "Unknown CUDA arch (10.1)".
+#
+# The list covers Turing through Blackwell natively (torch 2.11+cu128 ships
+# sm_75/80/86/90/100/120) and ends in +PTX so later GPUs JIT rather than fail.
+# The override has its own name on purpose -- defaulting to TORCH_CUDA_ARCH_LIST
+# would inherit the conda value this exists to replace:
+#
+#     POINTOPS_CUDA_ARCH_LIST=8.6 pixi install    # this GPU only, builds faster
+TORCH_CUDA_ARCH_LIST = "${POINTOPS_CUDA_ARCH_LIST:-7.5;8.0;8.6;8.9;9.0;10.0;12.0+PTX}"
 
 [tool.pixi.tasks]
 # Rebuild the pointops CUDA extension for a different GPU arch than the machine
