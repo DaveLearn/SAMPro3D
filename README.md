@@ -125,6 +125,11 @@ After finishing this, the visualization result of the final 3D segmentation will
 ### Time estimation ⚡️
 If everything goes well, the entire pipeline will just take 15 min for a large-scale 3D scene captured by 2000 2D frames. (**WE DO NOT NEED TRAIN❗️**)
 
+## DEG Baseline
+
+This repository also includes a DEG-compatible external entrypoint at `segment.py`, wired through `scripts/external_segmentation_initializers/sampro3d.sh`.
+That path uses tabletop-tuned defaults for the bridge CLI: `voxel_size=0.03`, `pred_iou_thres=0.7`, `stability_score_thres=0.6`, `box_nms_thres=0.7`, `keep_thres=0.01`, and `post_floor=False`.
+
 ## Animated Qualitative Comparison
 
 https://github.com/GAP-LAB-CUHK-SZ/SAMPro3D/assets/48080726/3a459c80-ac17-4750-a763-d477d33640bd

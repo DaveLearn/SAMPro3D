@@ -23,8 +23,6 @@ import numpy as np
 import open3d as o3d
 from plyfile import PlyData, PlyElement
 import torch
-
-from helpers.debug_visualize import DebugVisualizer
 from initializerdefs import (
     InstanceMaskObjectsDef,
     ObjectSegmentations,
@@ -694,13 +692,9 @@ def initialize_scene(
 
     scene_id = _sanitize_scene_id(observations.id or "scene")
 
-    debug_dir = intermediate_outputs_path / "debug" if intermediate_outputs_path else None
-    dbg = DebugVisualizer(debug_dir)
-
     # Write ScanNet-style temp dataset
     logger.info("Writing temp ScanNet dataset ...")
     dataset_root = _write_scannet_temp_dataset(frames, scene_id, mesh, work_root)
-    dbg.save_scannet_dataset(dataset_root, scene_id)
 
     # Free parent-process CUDA frame tensors before launching SAMPro3D subprocesses.
     del frames
@@ -730,7 +724,6 @@ def initialize_scene(
 
     # Load vertex labels
     vertex_labels = _load_sampro3d_labels(pred_path, scene_id, post_floor)
-    dbg.save_segmented_mesh(mesh, vertex_labels, "mesh_segmented_raw.ply")
 
     # Filter by workspace (zero out labels for segments mostly outside workspace)
     vertices = np.asarray(mesh.vertices)
@@ -773,7 +766,6 @@ def initialize_scene(
 
     vertex_labels_filtered = vertex_labels.copy()
     vertex_labels_filtered[~np.isin(vertex_labels_filtered, valid_ids)] = 0
-    dbg.save_segmented_mesh(mesh, vertex_labels_filtered, "mesh_filtered.ply")
 
     # Build InstanceMaskObjectsDef
     frame_ids: List[int] = []
@@ -790,8 +782,6 @@ def initialize_scene(
         frame_ids=frame_ids,
         pixel_object_ids=pixel_masks,
     )
-
-    dbg.save_pixel_masks(frames, instance_groups)
 
     logger.info("Initialized %d objects (after table removal)", len(valid_ids))
     runtime_stop(_rt)
