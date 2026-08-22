@@ -16,8 +16,6 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from urllib.request import urlretrieve
-
 import imageio.v2 as imageio
 import numpy as np
 import open3d as o3d
@@ -421,8 +419,23 @@ def _ensure_sam_checkpoint(model_type: str, checkpoint_path: Optional[Path]) -> 
         raise ValueError(f"Unknown SAM model type '{model_type}'. Cannot auto-download checkpoint.")
 
     logger.info("Downloading SAM checkpoint (%s) to %s ...", model_type, cached)
+    # Download to a temp name and rename on success, so an interrupted job
+    # never leaves a truncated .pth that passes the exists() check above.
+    partial = cached.with_name(default_name + ".partial")
     try:
-        urlretrieve(url, str(cached))
+        wget = shutil.which("wget")
+        if wget is not None:
+            subprocess.run(
+                [wget, "--quiet", "--tries=3", "--timeout=60", "-O", str(partial), url],
+                check=True,
+            )
+        else:
+            import urllib.request
+
+            with urllib.request.urlopen(url, timeout=60) as response:
+                with open(partial, "wb") as out_file:
+                    shutil.copyfileobj(response, out_file, length=1 << 20)
+        partial.replace(cached)
     except Exception as exc:
         raise RuntimeError(f"Failed to download SAM checkpoint from {url}: {exc}")
 
